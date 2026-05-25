@@ -5,7 +5,7 @@ import {
   GoogleAuthProvider, 
   signOut, 
   User as FirebaseUser,
-  onAuthStateChanged
+  onAuthStateChanged as fbOnAuthStateChanged
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -17,8 +17,11 @@ import {
   collection, 
   getDocFromServer
 } from 'firebase/firestore';
-import firebaseConfigImport from '../../firebase-applet-config.json';
 import { UnifiedSimulation } from './simulationsStore';
+
+// Use Vite's Glob Import to optionally resolve the local configuration file without crashing the build if it is missing
+const configs = import.meta.glob('../../firebase-applet-config.json', { eager: true }) as Record<string, { default: any }>;
+const firebaseConfigImport = configs['../../firebase-applet-config.json']?.default || null;
 
 // Build Firebase configuration using environment variables preferentially, with fallback to local JSON file
 const firebaseConfig = {
@@ -31,18 +34,61 @@ const firebaseConfig = {
   firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || firebaseConfigImport?.firestoreDatabaseId || ""
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || undefined);
-export const auth = getAuth();
+// Check if Firebase is fully and validly configured
+export const isFirebaseConfigured = !!(
+  firebaseConfig.apiKey && 
+  firebaseConfig.projectId && 
+  firebaseConfig.apiKey.trim() !== "" && 
+  firebaseConfig.projectId.trim() !== ""
+);
 
-// Test server connection as requested by framework/skills guidelines
-async function testConnection() {
+let app: any = null;
+export let db: any = null;
+export let auth: any = null;
+
+if (isFirebaseConfigured) {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    app = initializeApp(firebaseConfig);
+    db = getFirestore(app, firebaseConfig.firestoreDatabaseId || undefined);
+    auth = getAuth(app);
+    console.log("Firebase initialized successfully in online mode.");
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration.");
+    console.error("Error initializing Firebase application: ", error);
+  }
+} else {
+  console.warn("Firebase credentials are not defined. App running in robust Offline/Local mode.");
+}
+
+// Custom onAuthStateChanged wrapper
+export function onAuthStateChanged(authInstance: any, callback: (user: any | null) => void) {
+  if (isFirebaseConfigured && authInstance) {
+    return fbOnAuthStateChanged(authInstance, callback);
+  } else {
+    // Local Offline Fallback: Auto-login master developer Diego Martins
+    const mockUser = {
+      uid: 'local-dev-user',
+      email: 'diegofmartins@gmail.com',
+      displayName: 'Diego Martins (Modo Offline)',
+      emailVerified: true,
+      isAnonymous: false,
+      providerData: []
+    };
+    const timer = setTimeout(() => {
+      callback(mockUser);
+    }, 50);
+    return () => clearTimeout(timer);
+  }
+}
+
+// Test server connection (only in online mode)
+async function testConnection() {
+  if (isFirebaseConfigured && db) {
+    try {
+      await getDocFromServer(doc(db, 'test', 'connection'));
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('the client is offline')) {
+        console.error("Please check your Firebase configuration. Client is offline.");
+      }
     }
   }
 }
@@ -80,12 +126,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+      userId: auth?.currentUser?.uid || 'anonymous',
+      email: auth?.currentUser?.email || null,
+      emailVerified: auth?.currentUser?.emailVerified || null,
+      isAnonymous: auth?.currentUser?.isAnonymous || null,
+      tenantId: auth?.currentUser?.tenantId || null,
+      providerInfo: auth?.currentUser?.providerData?.map((provider: any) => ({
         providerId: provider.providerId,
         email: provider.email,
       })) || []
@@ -110,37 +156,117 @@ export interface SystemUser {
 // Google Pop-up Authentication
 const googleProvider = new GoogleAuthProvider();
 
-export async function loginWithGoogle(): Promise<FirebaseUser> {
-  try {
-    const result = await signInWithPopup(auth, googleProvider);
-    return result.user;
-  } catch (error) {
-    console.error('Error during Google authentication popup: ', error);
-    throw error;
+export async function loginWithGoogle(): Promise<any> {
+  if (isFirebaseConfigured && auth) {
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      return result.user;
+    } catch (error) {
+      console.error('Error during Google authentication popup: ', error);
+      throw error;
+    }
+  } else {
+    // Return mock logged-in user in offline mode
+    return {
+      uid: 'local-dev-user',
+      email: 'diegofmartins@gmail.com',
+      displayName: 'Diego Martins (Modo Offline)',
+      emailVerified: true,
+      isAnonymous: false,
+      providerData: []
+    };
   }
 }
 
 export async function logoutUser(): Promise<void> {
-  try {
-    await signOut(auth);
-  } catch (error) {
-    console.error('Error during log out: ', error);
-    throw error;
+  if (isFirebaseConfigured && auth) {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error('Error during log out: ', error);
+      throw error;
+    }
+  } else {
+    console.log('User signed out from Offline Mode.');
   }
 }
 
-// Check if user is registered in Firestore
+// --- Local Storage Cache Managers for Offline fallback ---
+const USERS_STORAGE_KEY = 'dgep_local_registered_users';
+const SIMULATIONS_STORAGE_KEY = 'dgep_local_legacy_simulations';
+
+function getLocalUsersSync(): SystemUser[] {
+  try {
+    const saved = localStorage.getItem(USERS_STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch (e) {
+    console.error('Error loading local users', e);
+  }
+  return [];
+}
+
+function saveLocalUsersSync(list: SystemUser[]) {
+  try {
+    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(list));
+  } catch (e) {
+    console.error('Error saving local users', e);
+  }
+}
+
+function getLocalSimsSync(): UnifiedSimulation[] {
+  try {
+    const saved = localStorage.getItem(SIMULATIONS_STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch (e) {
+    console.error('Error loading local simulations', e);
+  }
+  return [];
+}
+
+function saveLocalSimsSync(list: UnifiedSimulation[]) {
+  try {
+    localStorage.setItem(SIMULATIONS_STORAGE_KEY, JSON.stringify(list));
+  } catch (e) {
+    console.error('Error saving local simulations', e);
+  }
+}
+
+// Check if user is registered
 export async function getRegisteredUser(email: string): Promise<SystemUser | null> {
   const normalizedEmail = email.trim().toLowerCase();
-  const path = `users/${normalizedEmail}`;
-  try {
-    const userDocRef = doc(db, 'users', normalizedEmail);
-    const userSnapshot = await getDoc(userDocRef);
-    if (userSnapshot.exists()) {
-      return userSnapshot.data() as SystemUser;
+
+  if (isFirebaseConfigured && db) {
+    const path = `users/${normalizedEmail}`;
+    try {
+      const userDocRef = doc(db, 'users', normalizedEmail);
+      const userSnapshot = await getDoc(userDocRef);
+      if (userSnapshot.exists()) {
+        return userSnapshot.data() as SystemUser;
+      }
+      
+      // Auto-bootstrap master admin diegofmartins@gmail.com
+      if (normalizedEmail === 'diegofmartins@gmail.com') {
+        const bossUser: SystemUser = {
+          email: 'diegofmartins@gmail.com',
+          nome: 'Diego Martins',
+          role: 'admin',
+          allowed: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        await setDoc(doc(db, 'users', 'diegofmartins@gmail.com'), bossUser);
+        return bossUser;
+      }
+      
+      return null;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, path);
     }
-    
-    // Auto-bootstrap master admin diegofmartins@gmail.com
+  } else {
+    const localUsers = getLocalUsersSync();
+    const found = localUsers.find(u => u.email === normalizedEmail);
+    if (found) return found;
+
     if (normalizedEmail === 'diegofmartins@gmail.com') {
       const bossUser: SystemUser = {
         email: 'diegofmartins@gmail.com',
@@ -150,103 +276,148 @@ export async function getRegisteredUser(email: string): Promise<SystemUser | nul
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
-      // Save bootstrapper
-      await setDoc(doc(db, 'users', 'diegofmartins@gmail.com'), bossUser);
+      localUsers.push(bossUser);
+      saveLocalUsersSync(localUsers);
       return bossUser;
     }
-    
     return null;
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
   }
 }
 
 // Add/Save restricted user (Admin option)
 export async function saveRegisteredUser(user: SystemUser): Promise<void> {
   const normalizedEmail = user.email.trim().toLowerCase();
-  const path = `users/${normalizedEmail}`;
   const preparedUser = {
     ...user,
     email: normalizedEmail,
     updatedAt: new Date().toISOString()
   };
-  try {
-    await setDoc(doc(db, 'users', normalizedEmail), preparedUser);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
+
+  if (isFirebaseConfigured && db) {
+    const path = `users/${normalizedEmail}`;
+    try {
+      await setDoc(doc(db, 'users', normalizedEmail), preparedUser);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  } else {
+    const localUsers = getLocalUsersSync();
+    const filtered = localUsers.filter(u => u.email !== normalizedEmail);
+    filtered.push(preparedUser);
+    saveLocalUsersSync(filtered);
   }
 }
 
 // Delete user (Admin option)
 export async function deleteRegisteredUser(email: string): Promise<void> {
   const normalizedEmail = email.trim().toLowerCase();
-  const path = `users/${normalizedEmail}`;
-  try {
-    await deleteDoc(doc(db, 'users', normalizedEmail));
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
+
+  if (isFirebaseConfigured && db) {
+    const path = `users/${normalizedEmail}`;
+    try {
+      await deleteDoc(doc(db, 'users', normalizedEmail));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  } else {
+    const localUsers = getLocalUsersSync();
+    const filtered = localUsers.filter(u => u.email !== normalizedEmail);
+    saveLocalUsersSync(filtered);
   }
 }
 
 // Fetch all registered users list (Admin panel)
 export async function getAllRegisteredUsers(): Promise<SystemUser[]> {
-  const path = 'users';
-  try {
-    const querySnapshot = await getDocs(collection(db, 'users'));
-    const list: SystemUser[] = [];
-    querySnapshot.forEach((docSnap) => {
-      list.push(docSnap.data() as SystemUser);
-    });
-    
-    // Ensure Diego is in the listing even if database doesn't have it yet
-    if (!list.some(u => u.email === 'diegofmartins@gmail.com')) {
-      const boss: SystemUser = {
+  if (isFirebaseConfigured && db) {
+    const path = 'users';
+    try {
+      const querySnapshot = await getDocs(collection(db, 'users'));
+      const list: SystemUser[] = [];
+      querySnapshot.forEach((docSnap) => {
+        list.push(docSnap.data() as SystemUser);
+      });
+      
+      // Ensure Diego is in the listing even if database doesn't have it yet
+      if (!list.some(u => u.email === 'diegofmartins@gmail.com')) {
+        const boss: SystemUser = {
+          email: 'diegofmartins@gmail.com',
+          nome: 'Diego Martins',
+          role: 'admin',
+          allowed: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        list.push(boss);
+      }
+      
+      return list.sort((a, b) => a.email.localeCompare(b.email));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, path);
+    }
+  } else {
+    const localUsers = getLocalUsersSync();
+    if (!localUsers.some(u => u.email === 'diegofmartins@gmail.com')) {
+      localUsers.push({
         email: 'diegofmartins@gmail.com',
         nome: 'Diego Martins',
         role: 'admin',
         allowed: true,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
-      };
-      list.push(boss);
+      });
+      saveLocalUsersSync(localUsers);
     }
-    
-    return list.sort((a, b) => a.email.localeCompare(b.email));
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
+    return localUsers.sort((a, b) => a.email.localeCompare(b.email));
   }
 }
 
-// Firestore Simulations Operations (Replaces file-based local api endpoint!)
+// Firestore Simulations Operations
 export async function getFirestoreSimulations(): Promise<UnifiedSimulation[]> {
-  const path = 'simulations';
-  try {
-    const querySnapshot = await getDocs(collection(db, 'simulations'));
-    const sims: UnifiedSimulation[] = [];
-    querySnapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      sims.push(data as UnifiedSimulation);
-    });
-    return sims.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
+  if (isFirebaseConfigured && db) {
+    const path = 'simulations';
+    try {
+      const querySnapshot = await getDocs(collection(db, 'simulations'));
+      const sims: UnifiedSimulation[] = [];
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        sims.push(data as UnifiedSimulation);
+      });
+      return sims.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, path);
+    }
+  } else {
+    return getLocalSimsSync().sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }
 }
 
 export async function writeFirestoreSimulation(sim: UnifiedSimulation): Promise<void> {
-  const path = `simulations/${sim.id}`;
-  try {
-    await setDoc(doc(db, 'simulations', sim.id), sim);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
+  if (isFirebaseConfigured && db) {
+    const path = `simulations/${sim.id}`;
+    try {
+      await setDoc(doc(db, 'simulations', sim.id), sim);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  } else {
+    const sims = getLocalSimsSync();
+    const filtered = sims.filter(s => s.id !== sim.id);
+    filtered.push(sim);
+    saveLocalSimsSync(filtered);
   }
 }
 
 export async function deleteFirestoreSimulation(id: string): Promise<void> {
-  const path = `simulations/${id}`;
-  try {
-    await deleteDoc(doc(db, 'simulations', id));
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
+  if (isFirebaseConfigured && db) {
+    const path = `simulations/${id}`;
+    try {
+      await deleteDoc(doc(db, 'simulations', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  } else {
+    const sims = getLocalSimsSync();
+    const filtered = sims.filter(s => s.id !== id);
+    saveLocalSimsSync(filtered);
   }
 }

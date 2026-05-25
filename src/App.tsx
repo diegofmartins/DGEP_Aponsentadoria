@@ -16,9 +16,11 @@ import {
   loginWithGoogle, 
   logoutUser, 
   getRegisteredUser, 
-  SystemUser 
+  SystemUser,
+  onAuthStateChanged,
+  isFirebaseConfigured
 } from './utils/firebase';
-import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { User as FirebaseUser } from 'firebase/auth';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -275,7 +277,19 @@ export default function App() {
                 {new Date().toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
               </strong>
             </div>
-            <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse outline outline-3 outline-emerald-500/20" title="Online" />
+            {!isFirebaseConfigured && (
+              <span className="text-[9px] bg-amber-50 text-amber-700 font-bold border border-amber-200 uppercase tracking-widest px-2 py-0.5 rounded-full" title="Firebase não detectado. Usando armazenamento offline local.">
+                Modo Offline
+              </span>
+            )}
+            <div 
+              className={`h-2 w-2 rounded-full animate-pulse outline outline-3 transition-colors duration-300 ${
+                isFirebaseConfigured 
+                  ? 'bg-emerald-500 outline-emerald-500/20' 
+                  : 'bg-amber-500 outline-amber-500/20'
+              }`} 
+              title={isFirebaseConfigured ? "Firebase Conectado" : "Firebase Desconectado (Usando Modo Offline)"} 
+            />
           </div>
         </header>
 
