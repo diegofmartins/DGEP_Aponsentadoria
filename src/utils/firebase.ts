@@ -17,12 +17,23 @@ import {
   collection, 
   getDocFromServer
 } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import firebaseConfigImport from '../../firebase-applet-config.json';
 import { UnifiedSimulation } from './simulationsStore';
+
+// Build Firebase configuration using environment variables preferentially, with fallback to local JSON file
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfigImport?.apiKey || "",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfigImport?.authDomain || "",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseConfigImport?.projectId || "",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfigImport?.storageBucket || "",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfigImport?.messagingSenderId || "",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseConfigImport?.appId || "",
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || firebaseConfigImport?.firestoreDatabaseId || ""
+};
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || undefined);
 export const auth = getAuth();
 
 // Test server connection as requested by framework/skills guidelines

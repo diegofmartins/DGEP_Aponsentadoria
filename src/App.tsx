@@ -94,7 +94,7 @@ export default function App() {
               DGEP — Diretoria de Gestão de Pessoas
             </span>
             <h1 className="text-xl sm:text-2xl font-black text-gray-800 leading-tight">
-              Portal IPMC / CMC
+              Simulador de Aposentadoria
             </h1>
             <p className="text-gray-500 text-xs sm:text-sm">
               Sistema de Simulação de Aposentadoria e Proventos

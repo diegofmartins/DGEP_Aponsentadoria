@@ -35,8 +35,16 @@ let settingsCache = {
   fgs: defaultFGValues as FGValuesType
 };
 
-// Sync with backend
+// Sync with backend & LocalStorage fallback for high resilience on static hosts
 async function persistSettings() {
+  try {
+    localStorage.setItem(CAREERS_CACHE_KEY, JSON.stringify(settingsCache.careers));
+    localStorage.setItem(FG_CACHE_KEY, JSON.stringify(settingsCache.fgs));
+    localStorage.setItem(INSS_FATORES_CACHE_KEY, JSON.stringify(settingsCache.fatoresINSS));
+  } catch (lsErr) {
+    console.error('Failed to save settings to localStorage cache', lsErr);
+  }
+
   try {
     await fetch('/api/settings', {
       method: 'POST',
@@ -44,55 +52,44 @@ async function persistSettings() {
       body: JSON.stringify(settingsCache),
     });
   } catch (err) {
-    console.error('Failed to sync settings', err);
+    console.error('Failed to sync settings with server, using local storage cache fallback', err);
   }
 }
 
 // Called once on App init
 export async function loadSettingsFromServer(): Promise<void> {
+  // First load from localStorage to have immediate values and support static hosts
+  try {
+    const localCareers = localStorage.getItem(CAREERS_CACHE_KEY);
+    if (localCareers) settingsCache.careers = JSON.parse(localCareers);
+    
+    const localFGs = localStorage.getItem(FG_CACHE_KEY);
+    if (localFGs) settingsCache.fgs = JSON.parse(localFGs);
+    
+    const localFatores = localStorage.getItem(INSS_FATORES_CACHE_KEY);
+    if (localFatores) settingsCache.fatoresINSS = JSON.parse(localFatores);
+  } catch (e) {
+    console.error('Error loading settings local cache', e);
+  }
+
   try {
     const res = await fetch('/api/settings');
     if (res.ok) {
       const data = await res.json();
-      let migrated = false;
       
-      if (data.fatoresINSS) settingsCache.fatoresINSS = data.fatoresINSS;
-      else {
-        // migrate local
-        const local = localStorage.getItem(INSS_FATORES_CACHE_KEY);
-        if (local) {
-          settingsCache.fatoresINSS = JSON.parse(local);
-          migrated = true;
-          localStorage.removeItem(INSS_FATORES_CACHE_KEY);
-        }
+      // Merge server settings if they exist and are valid
+      if (data.fatoresINSS && (data.fatoresINSS.referenceMonthYear || data.fatoresINSS.fatoresText)) {
+        settingsCache.fatoresINSS = data.fatoresINSS;
       }
-
-      if (data.careers) settingsCache.careers = data.careers;
-      else {
-        const local = localStorage.getItem(CAREERS_CACHE_KEY);
-        if (local) {
-          settingsCache.careers = JSON.parse(local);
-          migrated = true;
-          localStorage.removeItem(CAREERS_CACHE_KEY);
-        }
+      if (data.careers && Object.keys(data.careers).length > 0) {
+        settingsCache.careers = data.careers;
       }
-
-      if (data.fgs) settingsCache.fgs = data.fgs;
-      else {
-        const local = localStorage.getItem(FG_CACHE_KEY);
-        if (local) {
-          settingsCache.fgs = JSON.parse(local);
-          migrated = true;
-          localStorage.removeItem(FG_CACHE_KEY);
-        }
-      }
-
-      if (migrated) {
-         await persistSettings();
+      if (data.fgs && data.fgs.FG4 > 0) {
+        settingsCache.fgs = data.fgs;
       }
     }
   } catch (err) {
-    console.error('Error fetching settings', err);
+    console.error('Error fetching settings from server, using local storage cache', err);
   }
 }
 
