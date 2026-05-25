@@ -38,6 +38,12 @@ export interface UnifiedSimulation {
 const STORAGE_KEY = 'dgep_unified_simulations';
 const DRAFT_KEY = 'dgep_unified_draft';
 
+import { 
+  getFirestoreSimulations, 
+  writeFirestoreSimulation, 
+  deleteFirestoreSimulation 
+} from './firebase';
+
 // Run migration on init
 export async function initMigration(): Promise<void> {
   const localSaved = localStorage.getItem(STORAGE_KEY);
@@ -45,12 +51,8 @@ export async function initMigration(): Promise<void> {
     try {
       const localSims: UnifiedSimulation[] = JSON.parse(localSaved);
       if (localSims.length > 0) {
-        console.log(`Migrating ${localSims.length} simulations from localStorage to backend...`);
-        const promises = localSims.map(sim => fetch('/api/simulations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(sim),
-        }));
+        console.log(`Migrating ${localSims.length} simulations from localStorage to Firestore...`);
+        const promises = localSims.map(sim => writeFirestoreSimulation(sim));
         await Promise.all(promises);
         localStorage.removeItem(STORAGE_KEY);
       }
@@ -63,11 +65,9 @@ export async function initMigration(): Promise<void> {
 // Get all saved simulations
 export async function getSavedSimulations(): Promise<UnifiedSimulation[]> {
   try {
-    const res = await fetch('/api/simulations');
-    if (!res.ok) throw new Error('API error');
-    return await res.json();
+    return await getFirestoreSimulations();
   } catch (e) {
-    console.error('Error fetching unified simulations', e);
+    console.error('Error fetching unified simulations from firestore', e);
     return [];
   }
 }
@@ -75,14 +75,10 @@ export async function getSavedSimulations(): Promise<UnifiedSimulation[]> {
 // Save a simulation
 export async function saveSimulation(sim: UnifiedSimulation): Promise<void> {
   try {
-    const res = await fetch('/api/simulations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(sim),
-    });
-    if (!res.ok) throw new Error('API error');
+    sim.updatedAt = new Date().toISOString();
+    await writeFirestoreSimulation(sim);
   } catch (e) {
-    console.error('Error saving simulation', e);
+    console.error('Error saving simulation to firestore', e);
     throw e;
   }
 }
@@ -90,12 +86,9 @@ export async function saveSimulation(sim: UnifiedSimulation): Promise<void> {
 // Delete a simulation
 export async function deleteSimulation(id: string): Promise<void> {
   try {
-    const res = await fetch(`/api/simulations/${id}`, {
-      method: 'DELETE',
-    });
-    if (!res.ok) throw new Error('API error');
+    await deleteFirestoreSimulation(id);
   } catch (e) {
-    console.error('Error deleting simulation', e);
+    console.error('Error deleting simulation from firestore', e);
     throw e;
   }
 }

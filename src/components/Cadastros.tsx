@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Save, 
   RotateCcw, 
@@ -11,7 +11,14 @@ import {
   Search,
   Sliders,
   Database,
-  Info
+  Info,
+  Users,
+  UserPlus,
+  Trash2,
+  Shield,
+  UserCheck,
+  XCircle,
+  X
 } from 'lucide-react';
 import { 
   romanNumerals, 
@@ -30,14 +37,33 @@ import {
   FatoresINSSData,
   defaultFatoresINSS
 } from '../utils/settingsStore';
+import { 
+  auth, 
+  getRegisteredUser, 
+  SystemUser, 
+  getAllRegisteredUsers, 
+  saveRegisteredUser, 
+  deleteRegisteredUser 
+} from '../utils/firebase';
 
 export default function Cadastros() {
-  // Tabs: 'careers' or 'fgs' or 'fatores'
-  const [activeTab, setActiveTab] = useState<'careers' | 'fgs' | 'fatores'>('careers');
+  // Tabs in order: 'users' | 'fatores' | 'careers' | 'fgs'
+  const [activeTab, setActiveTab] = useState<'users' | 'fatores' | 'careers' | 'fgs'>('users');
   
   // Selected career for career editing
   const [selectedCareer, setSelectedCareer] = useState<string>('assistente_administrativo');
   const [searchFilter, setSearchFilter] = useState('');
+
+  // Firebase Users State
+  const [usersList, setUsersList] = useState<SystemUser[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [isAdminUser, setIsAdminUser] = useState(false);
+  
+  // User Registration form state
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserNome, setNewUserNome] = useState('');
+  const [newUserRole, setNewUserRole] = useState<'admin' | 'user'>('user');
+  const [newUserAllowed, setNewUserAllowed] = useState<boolean>(true);
 
   // Local state for loaded data (allows batch editing before saving)
   const [careersData, setCareersData] = useState<CareerDataType>(() => {
@@ -100,18 +126,42 @@ export default function Cadastros() {
   const [showConfirmReset, setShowConfirmReset] = useState(false);
   const [showConfirmSave, setShowConfirmSave] = useState(false);
 
-  // Load saved data on mount
+  // Load saved tab on mount
   useEffect(() => {
     const draftTab = localStorage.getItem('dgep_draft_cadastros_tab');
-    if (draftTab === 'careers' || draftTab === 'fgs' || draftTab === 'fatores') setActiveTab(draftTab as any);
+    if (draftTab === 'users' || draftTab === 'careers' || draftTab === 'fgs' || draftTab === 'fatores') {
+      setActiveTab(draftTab as any);
+    }
     
     const draftSearch = localStorage.getItem('dgep_draft_cadastros_search');
     if (draftSearch) setSearchFilter(draftSearch);
     
     const draftSelectedCareer = localStorage.getItem('dgep_draft_cadastros_selected_career');
     if (draftSelectedCareer) setSelectedCareer(draftSelectedCareer);
-
   }, []);
+
+  // Fetch Firestore users list and check current user authorization level
+  const loadUsersAndPrivileges = async () => {
+    try {
+      setLoadingUsers(true);
+      const email = auth.currentUser?.email || '';
+      if (email) {
+        const profile = await getRegisteredUser(email);
+        setIsAdminUser(profile?.role === 'admin' || email === 'diegofmartins@gmail.com');
+      }
+      
+      const list = await getAllRegisteredUsers();
+      setUsersList(list);
+    } catch (e) {
+      console.error("Error loading system authorization data: ", e);
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  useEffect(() => {
+    loadUsersAndPrivileges();
+  }, [activeTab]);
 
   // Sync drafts to local storage
   useEffect(() => {
@@ -148,7 +198,7 @@ export default function Cadastros() {
   const isCareersDirty = JSON.stringify(careersData) !== JSON.stringify(pristineCareersData);
   const isFGSDirty = JSON.stringify(fgValues) !== JSON.stringify(pristineFgValues);
   const isFatoresDirty = JSON.stringify(fatoresINSS) !== JSON.stringify(pristineFatoresINSS);
-  const isDirty = isCareersDirty || isFGSDirty || isFatoresDirty;
+  const isDirty = activeTab !== 'users' && (isCareersDirty || isFGSDirty || isFatoresDirty);
 
   // Utility to show notification
   const showNotificationObj = (type: 'success' | 'error', message: string) => {
@@ -158,24 +208,90 @@ export default function Cadastros() {
     }, 4000);
   };
 
+  // User Actions (Create, Delete, Toggle access)
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUserEmail.trim() || !newUserNome.trim()) {
+      showNotificationObj('error', 'Por favor, preencha o nome e o e-mail do usuário.');
+      return;
+    }
+    
+    // Strict email check
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailPattern.test(newUserEmail.trim())) {
+      showNotificationObj('error', 'O formato do e-mail inserido é inválido.');
+      return;
+    }
+
+    try {
+      const newUser: SystemUser = {
+        email: newUserEmail.trim().toLowerCase(),
+        nome: newUserNome.trim(),
+        role: newUserRole,
+        allowed: newUserAllowed,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      await saveRegisteredUser(newUser);
+      showNotificationObj('success', `Usuário ${newUser.nome} cadastrado com sucesso!`);
+      setNewUserEmail('');
+      setNewUserNome('');
+      setNewUserRole('user');
+      setNewUserAllowed(true);
+      loadUsersAndPrivileges();
+    } catch (err: any) {
+      showNotificationObj('error', `Falha ao registrar usuário: ${err.message}`);
+    }
+  };
+
+  const handleDeleteUser = async (email: string) => {
+    if (email === auth.currentUser?.email || email === 'diegofmartins@gmail.com') {
+      showNotificationObj('error', 'Não é possível remover a si mesmo ou o Administrador Master do sistema.');
+      return;
+    }
+
+    if (window.confirm(`Tem certeza que deseja excluir as permissões do usuário ${email}?`)) {
+      try {
+        await deleteRegisteredUser(email);
+        showNotificationObj('success', 'Usuário removido com sucesso!');
+        loadUsersAndPrivileges();
+      } catch (err: any) {
+        showNotificationObj('error', `Erro ao remover usuário: ${err.message}`);
+      }
+    }
+  };
+
+  const handleToggleUserAccess = async (userObj: SystemUser) => {
+    if (userObj.email === 'diegofmartins@gmail.com') {
+      showNotificationObj('error', 'Não é permitido desautorizar o Administrador Master do sistema.');
+      return;
+    }
+
+    try {
+      const updatedUser: SystemUser = {
+        ...userObj,
+        allowed: !userObj.allowed
+      };
+      await saveRegisteredUser(updatedUser);
+      showNotificationObj('success', `Status de acesso do usuário ${userObj.nome} atualizado com sucesso!`);
+      loadUsersAndPrivileges();
+    } catch (err: any) {
+      showNotificationObj('error', `Erro ao alterar status: ${err.message}`);
+    }
+  };
+
   // String formatting helpers
   const formatValueBRL = (val: number): string => {
     return val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
-  const parseBRLString = (str: string): number => {
-    const cleaned = str.replace(/\./g, '').replace(',', '.');
-    return parseFloat(cleaned) || 0;
-  };
-
   // Currency masking on user input to enforce BRL visual layout
   const handleCareerLevelChange = (band: string, inputVal: string) => {
-    // Keep digits only
     let numericOnly = inputVal.replace(/\D/g, '');
     const numericInt = parseInt(numericOnly, 10) || 0;
     const decimalValue = numericInt / 100;
 
-    // Update state object
     setCareersData(prev => {
       const updatedCareer = { ...prev[selectedCareer] };
       updatedCareer[band] = decimalValue;
@@ -252,11 +368,11 @@ export default function Cadastros() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-gray-100">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-gray-800 flex items-center gap-2">
-              <Database className="text-indigo-600" size={24} />
-              Gestão de Cadastros e Valores Regulamentares
+              <Database className="text-indigo-650" size={24} />
+              Gestão de Cadastros
             </h1>
             <p className="text-gray-500 text-xs sm:text-sm mt-1">
-              Painel administrativo para alterar salários de tabela e referências remuneratórias compartilhados entre as calculadoras
+              Painel administrativo para controle de acesso de usuários e parametrização dos fatores, cargos e funções do sistema
             </p>
           </div>
           <button 
@@ -289,31 +405,21 @@ export default function Cadastros() {
           </div>
         )}
 
-        {/* Navigation Tabs */}
-        <div className="flex border-b border-gray-200">
+        {/* Navigation Tabs - Reordered as requested */}
+        <div className="flex border-b border-gray-200 overflow-x-auto w-full scrollbar-none">
           <button
-            onClick={() => setActiveTab('careers')}
-            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 ${
-              activeTab === 'careers'
+            onClick={() => setActiveTab('users')}
+            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
+              activeTab === 'users'
                 ? 'border-indigo-600 text-indigo-700'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            <Briefcase size={16} /> Salário Base por Cargo (Faixas I a XXXVI)
-          </button>
-          <button
-            onClick={() => setActiveTab('fgs')}
-            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 ${
-              activeTab === 'fgs'
-                ? 'border-indigo-600 text-indigo-700'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <Award size={16} /> Funções Gratificadas (FGs Referência)
+            <Users size={16} /> Usuários
           </button>
           <button
             onClick={() => setActiveTab('fatores')}
-            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 ${
+            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
               activeTab === 'fatores'
                 ? 'border-indigo-600 text-indigo-700'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -321,13 +427,37 @@ export default function Cadastros() {
           >
             <TrendingUp size={16} /> Fatores de Conversão
           </button>
+          <button
+            onClick={() => setActiveTab('careers')}
+            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
+              activeTab === 'careers'
+                ? 'border-indigo-600 text-indigo-700'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Briefcase size={16} /> Salários Base por Cargo
+          </button>
+          <button
+            onClick={() => setActiveTab('fgs')}
+            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
+              activeTab === 'fgs'
+                ? 'border-indigo-600 text-indigo-700'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Award size={16} /> Funções Gratificadas
+          </button>
         </div>
 
         {/* Info panel */}
         <div className="flex items-start gap-2.5 p-4 bg-blue-50/50 border border-blue-100 text-[#004b8d] rounded-lg text-xs">
           <Info size={16} className="shrink-0 mt-0.5 text-blue-600" />
           <div>
-            As calculadoras do **Simulador de Proventos** e da **Gratificação Especial** utilizam em tempo real os valores cadastrados neste painel. Quaisquer alterações salvas aqui afetarão imediatamente as projeções salariais.
+            {activeTab === 'users' ? (
+              <span>Os usuários cadastrados nesta tela possuem acesso controlado via Google Authentication. Apenas administradores do sistema têm permissão para adicionar ou remover perfis de acesso.</span>
+            ) : (
+              <span>As calculadoras do **Simulador de Proventos** e da **Gratificação Especial** utilizam em tempo real os valores cadastrados neste painel. Quaisquer alterações salvas aqui afetarão imediatamente as projeções salariais.</span>
+            )}
           </div>
         </div>
 
@@ -338,6 +468,164 @@ export default function Cadastros() {
             <div>
               <span className="font-bold">Alterações pendentes de salvamento:</span> Você alterou valores da tabela administrativa que ainda não foram gravados localmente. Clique em <strong>Salvar Parâmetros do Cadastro</strong> para confirmar e sincronizar.
             </div>
+          </div>
+        )}
+
+        {/* USER ADMINISTRATION SCREEN */}
+        {activeTab === 'users' && (
+          <div className="space-y-6 pt-2">
+            
+            {/* Form to manual register users - visible for admin eyes only */}
+            {isAdminUser ? (
+              <form onSubmit={handleCreateUser} className="bg-gray-50 border border-gray-150 rounded-xl p-5 space-y-4 shadow-3xs">
+                <h3 className="text-sm font-bold text-gray-800 flex items-center gap-1.5 pb-2 border-b border-gray-200/60">
+                  <UserPlus size={16} className="text-indigo-600" />
+                  Cadastrar Novo Usuário Autorizado
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wide block">Nome Completo</label>
+                    <input
+                      type="text"
+                      required
+                      value={newUserNome}
+                      onChange={(e) => setNewUserNome(e.target.value)}
+                      placeholder="Ex: Maria Souza"
+                      className="w-full p-2.5 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-1.5 focus:ring-indigo-600 transition-all text-gray-800 font-medium"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wide block">E-mail (Google)</label>
+                    <input
+                      type="email"
+                      required
+                      value={newUserEmail}
+                      onChange={(e) => setNewUserEmail(e.target.value)}
+                      placeholder="Ex: m.souza@gmail.com"
+                      className="w-full p-2.5 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-1.5 focus:ring-indigo-600 transition-all text-gray-800 font-medium font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wide block">Perfil / Permissão</label>
+                    <select
+                      value={newUserRole}
+                      onChange={(e) => setNewUserRole(e.target.value as any)}
+                      className="w-full p-2.5 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-1.5 focus:ring-indigo-600 transition-all text-gray-800 font-medium"
+                    >
+                      <option value="user">Usuário Comum</option>
+                      <option value="admin">Administrador</option>
+                    </select>
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full flex items-center justify-center gap-1.5 py-2.5 px-4 bg-indigo-600 text-white font-bold text-xs rounded-lg shadow-sm hover:bg-indigo-700 transition-all cursor-pointer"
+                  >
+                    <UserPlus size={14} /> Registrar Usuário
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="flex items-center gap-2 p-3.5 bg-amber-50 border border-amber-200 text-amber-850 rounded-lg text-xs">
+                <AlertCircle size={15} />
+                Caso precise cadastrar algum colega, solicite à administração (<strong>diegofmartins@gmail.com</strong>) para registrá-lo. Apenas portadores de perfil Administrador possuem permissões de cadastro.
+              </div>
+            )}
+
+            {/* List of Whitelisted Users */}
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-3xs">
+              <div className="px-5 py-4 border-b border-gray-150 flex justify-between items-center bg-gray-50/50">
+                <h3 className="text-xs font-bold text-gray-600 uppercase tracking-wider">
+                  Relação de Usuários Autorizados ({usersList.length})
+                </h3>
+                {loadingUsers && (
+                  <span className="text-[10px] text-gray-400 font-medium block animate-pulse">Sincronizando...</span>
+                )}
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-150 bg-gray-50 text-gray-500 uppercase tracking-wide font-bold">
+                      <th className="py-3 px-4">Nome Completo</th>
+                      <th className="py-3 px-4">E-mail de Acesso</th>
+                      <th className="py-3 px-4 text-center">Perfil</th>
+                      <th className="py-3 px-4 text-center">Acesso</th>
+                      {isAdminUser && <th className="py-3 px-4 text-center">Ações</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 font-medium">
+                    {usersList.map((usr) => (
+                      <tr key={usr.email} className="hover:bg-gray-50/30 transition-all text-gray-700">
+                        <td className="py-3.5 px-4 font-semibold text-gray-900">{usr.nome}</td>
+                        <td className="py-3.5 px-4 font-mono font-normal text-gray-550">{usr.email}</td>
+                        <td className="py-3.5 px-4 text-center">
+                          {usr.role === 'admin' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-100 text-red-800 font-bold uppercase text-[9px] tracking-wide">
+                              <Shield size={10} /> Admin
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-semibold uppercase text-[9px] tracking-wide">
+                              Membro
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          {usr.allowed ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[9px] uppercase tracking-wide">
+                              ● Liberado
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-100 text-red-800 font-bold text-[9px] uppercase tracking-wide">
+                              ● Bloqueado
+                            </span>
+                          )}
+                        </td>
+                        {isAdminUser && (
+                          <td className="py-3.5 px-4 text-center space-x-2">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleUserAccess(usr)}
+                              disabled={usr.email === 'diegofmartins@gmail.com'}
+                              className={`p-1.5 rounded-lg border text-[10px] uppercase font-bold tracking-wide transition-all ${
+                                usr.email === 'diegofmartins@gmail.com'
+                                  ? 'opacity-30 cursor-not-allowed border-gray-105 bg-gray-50 text-gray-400'
+                                  : usr.allowed
+                                    ? 'border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-700 cursor-pointer'
+                                    : 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 cursor-pointer'
+                              }`}
+                              title={usr.allowed ? 'Alternar para Bloquear acesso' : 'Reverter para Autorizar acesso'}
+                            >
+                              {usr.allowed ? 'Bloquear' : 'Autorizar'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteUser(usr.email)}
+                              disabled={usr.email === auth.currentUser?.email || usr.email === 'diegofmartins@gmail.com'}
+                              className={`p-1.5 rounded-lg border inline-flex items-center justify-center transition-all ${
+                                usr.email === auth.currentUser?.email || usr.email === 'diegofmartins@gmail.com'
+                                  ? 'opacity-30 cursor-not-allowed border-gray-105 bg-gray-50 text-gray-400'
+                                  : 'border-red-200 hover:bg-red-50 text-red-600 hover:text-red-700 cursor-pointer'
+                              }`}
+                              title="Remover cadastro permanentemente"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                    {usersList.length === 0 && (
+                      <tr>
+                        <td colSpan={isAdminUser ? 5 : 4} className="py-8 px-4 text-center italic text-gray-400">
+                          Nenhum usuário foi cadastrado na base de dados do Firestore.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
           </div>
         )}
 
@@ -388,7 +676,7 @@ export default function Cadastros() {
               </div>
             </div>
 
-            {/* Right container: Faixas Grid Editor */}
+            {/* Right container: River Grid Editor */}
             <div className="lg:col-span-8 space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-indigo-50/40 p-4 border border-indigo-100/40 rounded-xl">
                 <div>
@@ -463,7 +751,7 @@ export default function Cadastros() {
                           type="text"
                           value={formatValueBRL(val)}
                           onChange={(e) => handleFGValueChange(fgKey, e.target.value)}
-                          className="w-full pl-7 pr-2 py-1.5 border border-gray-250 focus:outline-none focus:ring-1.5 focus:ring-indigo-600/20 focus:border-indigo-600 rounded-md text-xs font-black text-gray-850 text-right font-mono"
+                          className="w-full pl-7 pr-2 py-1.5 border border-gray-250 focus:outline-none focus:ring-1.5 focus:ring-indigo-600/20 focus:border-indigo-600 rounded-md text-xs font-black text-gray-855 text-right font-mono"
                         />
                       </div>
                     </div>
@@ -542,31 +830,29 @@ export default function Cadastros() {
           </div>
         )}
 
-        {/* Global Action Save bar */}
-        <div className="flex flex-col sm:flex-row gap-4 pt-4 border-t border-gray-100 items-center justify-between">
-          <div className="text-xs">
-            {isDirty ? (
-              <span className="text-amber-600 font-semibold flex items-center gap-1.5 animate-pulse">
-                ● Alterações pendentes de salvamento
-              </span>
-            ) : (
-              <span className="text-emerald-600 font-semibold flex items-center gap-1.5">
-                ● Configurações salvas e sincronizadas
-              </span>
-            )}
+        {/* Global Action Save bar - Only visible for parameters tabs */}
+        {activeTab !== 'users' && (
+          <div className="flex flex-col sm:flex-row gap-4 pt-4 border-t border-gray-100 items-center justify-between">
+            <div className="text-xs">
+              {isDirty ? (
+                <span className="text-amber-600 font-semibold flex items-center gap-1.5 animate-pulse">
+                  ● Alterações pendentes de salvamento
+                </span>
+              ) : (
+                <span className="text-emerald-600 font-semibold flex items-center gap-1.5">
+                  ● Configurações salvas e sincronizadas
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowConfirmSave(true)}
+              className="w-full sm:w-auto flex items-center justify-center gap-1.5 py-3 px-8 text-white font-bold text-sm bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm active:scale-[0.98] transition-all cursor-pointer"
+            >
+              <Save size={15} /> Salvar Parâmetros do Cadastro
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowConfirmSave(true)}
-            className={`w-full sm:w-auto flex items-center justify-center gap-1.5 py-3 px-8 text-white font-bold text-sm rounded-lg shadow-sm active:scale-[0.98] transition-all cursor-pointer ${
-              isDirty 
-                ? 'bg-indigo-600 hover:bg-indigo-700 animate-pulse' 
-                : 'bg-indigo-600 hover:bg-indigo-700'
-            }`}
-          >
-            <Save size={15} /> Salvar Parâmetros do Cadastro
-          </button>
-        </div>
+        )}
       </div>
 
       {/* Confirmation Save Modal */}
@@ -622,7 +908,7 @@ export default function Cadastros() {
               <button 
                 type="button" 
                 onClick={handleResetDefaults}
-                className="flex-1 py-2 px-4 bg-red-650 hover:bg-red-750 text-white text-xs sm:text-sm font-semibold rounded-lg cursor-pointer transition-all shadow-xs"
+                className="flex-1 py-2 px-4 bg-red-650 hover:bg-red-755 text-white text-xs sm:text-sm font-semibold rounded-lg cursor-pointer transition-all shadow-xs"
               >
                 Sim, Reverter
               </button>

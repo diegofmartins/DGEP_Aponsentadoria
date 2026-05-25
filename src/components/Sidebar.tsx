@@ -31,7 +31,7 @@ export default function Sidebar({ activeTab, onSelectTab, isMobileOpen, setIsMob
     { id: 'regras', label: 'Simulador Regras', icon: ShieldAlert, color: 'text-emerald-600' },
     { id: 'atualizacao', label: 'Atualização de Contribuições', icon: RefreshCw, color: 'text-amber-600' },
     { id: 'gratificacao', label: 'Gratificação Especial', icon: Award, color: 'text-red-700' },
-    { id: 'cadastros', label: 'Cadastros', icon: Database, color: 'text-indigo-400' }
+    { id: 'cadastros', label: 'Gestão de Cadastros', icon: Database, color: 'text-indigo-400' }
   ];
 
   return (
